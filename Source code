@@ -1,0 +1,186 @@
+import streamlit as st
+import requests
+import folium
+from streamlit_folium import st_folium
+from geopy.geocoders import Nominatim
+from googletrans import Translator
+from geopy.exc import GeocoderUnavailable
+import urllib.parse
+
+# ------------------- Functions -------------------
+
+def create_google_maps_url(query):
+    return f"https://www.google.com/maps/search/?api=1&query={urllib.parse.quote_plus(query)}"
+
+def get_hotels_or_hostels(destination, api_key):
+    geolocator = Nominatim(user_agent="travel_app")
+    location = geolocator.geocode(destination)
+    hotels = []
+
+    if location:
+        lat, lon = location.latitude, location.longitude
+        url = f"https://maps.googleapis.com/maps/api/place/nearbysearch/json?location={lat},{lon}&radius=5000&type=lodging&key={api_key}"
+        response = requests.get(url)
+        data = response.json()
+
+        if response.status_code == 200:
+            for result in data.get("results", []):
+                name = result.get("name", "Unnamed")
+                address = result.get("vicinity", "Address not available")
+                hotels.append(f"{name} - {address}")
+
+    return hotels
+
+def get_famous_places_and_hotels(destination, api_key):
+    # Sample places for known destinations
+    sample_data = {
+        "goa": {
+            "places": ["Baga Beach", "Fort Aguada", "Basilica of Bom Jesus", "Anjuna Beach", "Dudhsagar Falls"],
+            "hotels": ["Taj Exotica", "The Leela Goa", "W Goa", "Grand Hyatt", "Novotel Goa"]
+        },
+        "delhi": {
+            "places": ["India Gate", "Red Fort", "Lotus Temple", "Qutub Minar", "Akshardham Temple"],
+            "hotels": ["The Imperial", "Taj Palace", "The Oberoi", "ITC Maurya"]
+        },
+        "paris": {
+            "places": ["Eiffel Tower", "Louvre Museum", "Notre-Dame Cathedral", "Arc de Triomphe", "Montmartre"],
+            "hotels": ["The Ritz Paris", "Le Meurice", "Four Seasons Paris", "Shangri-La Paris"]
+        }
+    }
+
+    if destination.lower() in sample_data:
+        data = sample_data[destination.lower()]
+        return {"places": data["places"], "hotels": data["hotels"]}
+    else:
+        # fallback if destination is not predefined
+        hotels = get_hotels_or_hostels(destination, api_key)
+        return {
+            "places": [f"Explore top landmarks in {destination}", "Use local guide apps for highlights."],
+            "hotels": hotels if hotels else ["No hotel data found. Try another location or check Google Maps."]
+        }
+
+def generate_itinerary(destination, famous_places, hotels, weather=None):
+    itinerary = f"\n✈ Your itinerary for {destination}:\n\n"
+    itinerary += "🏰 Places you must visit:\n"
+    for place in famous_places:
+        itinerary += f"- {place}\n"
+
+    itinerary += "\n🍴 Things to do:\n"
+    itinerary += "- Taste the best local dishes.\n"
+    itinerary += "- Shop in vibrant local markets.\n"
+    itinerary += "- Enjoy cultural performances or festivals.\n"
+    itinerary += "- Plan day trips to nearby attractions.\n"
+
+    itinerary += "\n🏨 Recommended Hotels / Hostels:\n"
+    for hotel in hotels:
+        itinerary += f"- {hotel}\n"
+
+    if weather:
+        itinerary += f"\n🌦 Weather forecast: {weather}\n"
+
+    return itinerary
+
+def translate_text(text, target_lang="es"):
+    translator = Translator()
+    translated = translator.translate(text, dest=target_lang)
+    return translated.text
+
+def get_weather(destination):
+    try:
+        api_key = "b02b17aaf837fec18814f0df41e91fe6"  # OpenWeatherMap API key
+        url = f"http://api.openweathermap.org/data/2.5/weather?q={destination}&appid={api_key}&units=metric"
+        response = requests.get(url)
+        data = response.json()
+        if response.status_code == 200:
+            weather_desc = data['weather'][0]['description'].capitalize()
+            temperature = data['main']['temp']
+            return f"{weather_desc} with {temperature}°C."
+    except Exception:
+        return None
+    return None
+
+def show_map(destination, famous_places, hotels, key="map"):
+    geolocator = Nominatim(user_agent="travel_app")
+    try:
+        location = geolocator.geocode(destination)
+        if location:
+            m = folium.Map(location=[location.latitude, location.longitude], zoom_start=13)
+            folium.Marker([location.latitude, location.longitude], popup=f"Destination: {destination}").add_to(m)
+
+            for place in famous_places:
+                loc = geolocator.geocode(f"{place}, {destination}")
+                if loc:
+                    folium.Marker([loc.latitude, loc.longitude], popup=f"Place: {place}").add_to(m)
+
+            for hotel in hotels:
+                loc = geolocator.geocode(f"{hotel}, {destination}")
+                if loc:
+                    folium.Marker([loc.latitude, loc.longitude], popup=f"Hotel: {hotel}").add_to(m)
+
+            st_folium(m, width=700, height=500, key=key)
+        else:
+            st.warning("⚠ Location not found.")
+    except GeocoderUnavailable:
+        st.error("⚠ Geocoding service is unavailable.")
+
+# ------------------- UI -------------------
+
+st.set_page_config(page_title="🌍 AI Travel Companion", page_icon="🧭")
+st.title("🌍 Advanced AI Travel Companion")
+st.sidebar.header("✈️ Plan Your Trip")
+
+destination = st.sidebar.text_input("Enter Destination")
+language = st.sidebar.selectbox("Translate Itinerary To", ["en", "es", "fr", "de", "hi", "zh"])
+api_key = "your_google_places_api_key_here"  # <-- Replace with your valid Google Places API Key
+
+if "itinerary" not in st.session_state:
+    st.session_state.itinerary = None
+
+if st.sidebar.button("Generate Plan"):
+    if destination:
+        result = get_famous_places_and_hotels(destination, api_key)
+        famous_places = result["places"]
+        hotels = result["hotels"]
+        weather = get_weather(destination)
+
+        itinerary = generate_itinerary(destination, famous_places, hotels, weather)
+        if language != "en":
+            st.session_state.itinerary = translate_text(itinerary, language)
+        else:
+            st.session_state.itinerary = itinerary
+
+        st.session_state.places = famous_places
+        st.session_state.hotels = hotels
+
+if st.session_state.itinerary:
+    st.subheader("🗓 Travel Itinerary")
+    st.write(st.session_state.itinerary)
+
+    if st.session_state.places:
+        st.subheader("🏰 Famous Places to Visit")
+        for place in st.session_state.places:
+            col1, col2 = st.columns([4, 1])
+            with col1:
+                st.markdown(f"**{place}**")
+                st.markdown(f"[🌍 Open in Google Maps]({create_google_maps_url(place + ' ' + destination)})")
+            with col2:
+                st.image(
+                    f"https://source.unsplash.com/400x300/?{urllib.parse.quote_plus(place + ' ' + destination)}",
+                    use_container_width=True
+                )
+
+    if st.session_state.hotels:
+        st.subheader("🏨 Recommended Hotels / Hostels")
+        for hotel in st.session_state.hotels:
+            col1, col2 = st.columns([4, 1])
+            with col1:
+                st.markdown(f"**{hotel}**")
+                st.markdown(f"[🏨 View on Google Maps]({create_google_maps_url(hotel + ' ' + destination)})")
+            with col2:
+                st.image(
+                    f"https://source.unsplash.com/400x300/?{urllib.parse.quote_plus(hotel)}",
+                    use_container_width=True
+                )
+
+    st.subheader("🌍 Map View")
+    show_map(destination, st.session_state.places, st.session_state.hotels, key="map_final")
